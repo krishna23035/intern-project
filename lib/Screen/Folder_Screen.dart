@@ -1,12 +1,11 @@
+import 'package:flutter/material.dart';
+import 'package:file_manager/file_manager.dart';
+import 'package:open_file/open_file.dart';
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:file_manager/file_manager.dart';
 
 class FolderScreen extends StatefulWidget {
   const FolderScreen({Key? key}) : super(key: key);
@@ -19,37 +18,9 @@ class _FolderScreenState extends State<FolderScreen> {
   late FileManagerController controller;
   bool isGridView = false;
 
-
   Set<FileSystemEntity> selectedItems = {};
   FileSystemEntity? _cutEntity;
   bool _isSelectionMode = false;
-
-
-
-  Future<void> copyDirectory(String source, String destination) async {
-    try {
-      final sourceDir = Directory(source);
-      final destinationDir = Directory(destination);
-
-      if (!await destinationDir.exists()) {
-        await destinationDir.create(recursive: true);
-      }
-
-      await for (final entity in sourceDir.list(recursive: true)) {
-        final newPath = destinationDir.path + '/' + entity.path.split('/').last;
-        if (entity is Directory) {
-          await copyDirectory(entity.path, newPath);
-        } else if (entity is File) {
-          await entity.copy(newPath);
-        }
-      }
-    } catch (e) {
-      print('Error copying directory: $e');
-    }
-  }
-
-
-
 
   @override
   void initState() {
@@ -67,35 +38,41 @@ class _FolderScreenState extends State<FolderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        actions: _isSelectionMode ? _buildSelectionActions() : _buildRegularActions(),
-        title: _buildAppBarTitle(),
-        leading: _isSelectionMode
-            ? null
-            : IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            Navigator.of(context).pop();
+    return WillPopScope(
+      onWillPop: () async {
+        if (_isSelectionMode) {
+          setState(() {
+            _isSelectionMode = false;
+            selectedItems.clear();
+          });
+          return false;
+        }
+        return true;
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: IconButton(
+            icon: Icon(Icons.arrow_back),
+             onPressed : () async{
+               await controller.goToParentDirectory();
+             }
+          ),
+          actions: _isSelectionMode
+              ? _buildSelectionActions()
+              : _buildRegularActions(),
+          title: _buildAppBarTitle(),
+        ),
+        body: FileManager(
+          controller: controller,
+          builder: (context, snapshot) {
+            final List<FileSystemEntity>? entities = snapshot;
+            return entities != null
+                ? isGridView
+                ? buildGridView(entities)
+                : buildListView(entities)
+                : Center(child: CircularProgressIndicator());
           },
         ),
-      ),
-      body: FileManager(
-        controller: controller,
-        builder: (context, snapshot) {
-          final List<FileSystemEntity>? entities = snapshot;
-          return entities != null
-              ? isGridView
-              ? buildGridView(entities)
-              : buildListView(entities)
-              : Center(child: CircularProgressIndicator());
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await requestStoragePermission();
-        },
-        label: const Text("Request File Access Permission"),
       ),
     );
   }
@@ -119,7 +96,8 @@ class _FolderScreenState extends State<FolderScreen> {
                 child: Text(
                   folders[i],
                   style: TextStyle(
-                    fontWeight: i == folders.length - 1 ? FontWeight.bold : null,
+                    fontWeight:
+                    i == folders.length - 1 ? FontWeight.bold : null,
                     fontSize: 14.0,
                   ),
                 ),
@@ -205,22 +183,9 @@ class _FolderScreenState extends State<FolderScreen> {
   Widget buildListItem(FileSystemEntity entity) {
     final isSelected = selectedItems.contains(entity);
     return GestureDetector(
-      onLongPress: () {
-        setState(() {
-          _isSelectionMode = true;
-          selectedItems.add(entity);
-        });
-      },
       onTap: () {
         if (_isSelectionMode) {
-          setState(() {
-            if (isSelected) {
-              selectedItems.remove(entity);
-              if (selectedItems.isEmpty) _isSelectionMode = false;
-            } else {
-              selectedItems.add(entity);
-            }
-          });
+          toggleSelection(entity);
         } else {
           if (FileManager.isDirectory(entity)) {
             controller.openDirectory(entity);
@@ -229,10 +194,15 @@ class _FolderScreenState extends State<FolderScreen> {
           }
         }
       },
+      onLongPress: () {
+        toggleSelection(entity);
+      },
       child: Card(
         color: isSelected ? Colors.blue.withOpacity(0.5) : null,
         child: ListTile(
-          leading: FileManager.isFile(entity) ? const Icon(Icons.feed_outlined) : const Icon(Icons.folder),
+          leading: FileManager.isFile(entity)
+              ? const Icon(Icons.feed_outlined)
+              : const Icon(Icons.folder),
           title: Text(
             FileManager.basename(entity, showFileExtension: true),
           ),
@@ -245,22 +215,9 @@ class _FolderScreenState extends State<FolderScreen> {
   Widget buildGridItem(FileSystemEntity entity) {
     final isSelected = selectedItems.contains(entity);
     return GestureDetector(
-      onLongPress: () {
-        setState(() {
-          _isSelectionMode = true;
-          selectedItems.add(entity);
-        });
-      },
       onTap: () {
         if (_isSelectionMode) {
-          setState(() {
-            if (isSelected) {
-              selectedItems.remove(entity);
-              if (selectedItems.isEmpty) _isSelectionMode = false;
-            } else {
-              selectedItems.add(entity);
-            }
-          });
+          toggleSelection(entity);
         } else {
           if (FileManager.isDirectory(entity)) {
             controller.openDirectory(entity);
@@ -269,19 +226,15 @@ class _FolderScreenState extends State<FolderScreen> {
           }
         }
       },
+      onLongPress: () {
+        toggleSelection(entity);
+      },
       child: Card(
         color: isSelected ? Colors.blue.withOpacity(0.5) : null,
         child: InkWell(
           onTap: () async {
             if (_isSelectionMode) {
-              setState(() {
-                if (isSelected) {
-                  selectedItems.remove(entity);
-                  if (selectedItems.isEmpty) _isSelectionMode = false;
-                } else {
-                  selectedItems.add(entity);
-                }
-              });
+              toggleSelection(entity);
             } else {
               if (FileManager.isDirectory(entity)) {
                 controller.openDirectory(entity);
@@ -296,7 +249,9 @@ class _FolderScreenState extends State<FolderScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                FileManager.isFile(entity) ? const Icon(Icons.feed_outlined) : const Icon(Icons.folder),
+                FileManager.isFile(entity)
+                    ? const Icon(Icons.feed_outlined)
+                    : const Icon(Icons.folder),
                 const SizedBox(height: 8.0),
                 Text(
                   FileManager.basename(entity, showFileExtension: true),
@@ -413,34 +368,37 @@ class _FolderScreenState extends State<FolderScreen> {
     );
   }
 
-  void createFolder(BuildContext context) async {
+
+
+  createFolder(BuildContext context) async {
     showDialog(
       context: context,
-      builder: (context) {
-        TextEditingController folderName = TextEditingController();
+      builder: (BuildContext context) {
+        var folderCreate = TextEditingController();
         return Dialog(
           child: Container(
-            padding: const EdgeInsets.all(10),
+            padding: EdgeInsets.all(10),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 ListTile(
                   title: TextField(
-                    controller: folderName,
+                    controller: folderCreate,
                   ),
                 ),
                 ElevatedButton(
-                  onPressed: () async {
-                    try {
-                      await FileManager.createFolder(controller.getCurrentPath, folderName.text);
-                      controller.setCurrentPath=controller.getCurrentPath + "/" + folderName.text;
-                    } catch (e) {
-                      print('Error creating folder: $e');
-                    }
-                    Navigator.pop(context);
-                  },
-                  child: const Text('Create Folder'),
-                )
+                    onPressed: () async {
+                      try {
+                        await FileManager.createFolder(
+                            controller.getCurrentPath, folderCreate.text);
+                        controller.setCurrentPath =
+                            controller.getCurrentPath + "/" + folderCreate.text;
+                        Navigator.pop(context);
+                      } catch (e) {
+                        Navigator.pop(context);
+                      }
+                    },
+                    child: Text("Create Folders"))
               ],
             ),
           ),
@@ -448,6 +406,11 @@ class _FolderScreenState extends State<FolderScreen> {
       },
     );
   }
+
+  // Future<void> _createFolder(String folderPath) async {
+  //   Directory newFolder = Directory(folderPath);
+  //   await newFolder.create();
+  // }
 
   void openFile(FileSystemEntity entity) async {
     try {
@@ -461,6 +424,20 @@ class _FolderScreenState extends State<FolderScreen> {
     } catch (e) {
       print('Error opening file: $e');
     }
+  }
+
+  void toggleSelection(FileSystemEntity entity) {
+    setState(() {
+      if (selectedItems.contains(entity)) {
+        selectedItems.remove(entity);
+        if (selectedItems.isEmpty) {
+          _isSelectionMode = false;
+        }
+      } else {
+        selectedItems.add(entity);
+        _isSelectionMode = true;
+      }
+    });
   }
 
   Future<void> cut() async {
@@ -477,10 +454,12 @@ class _FolderScreenState extends State<FolderScreen> {
     _cutEntity = selectedItems.isNotEmpty ? selectedItems.first : null;
     _isSelectionMode = false;
   }
+
   Future<void> paste() async {
     if (_cutEntity != null) {
       try {
-        final String newPath = '${controller.getCurrentPath}/${FileManager.basename(_cutEntity!.path)}';
+        final String newPath =
+            '${controller.getCurrentPath}/${FileManager.basename(_cutEntity!.path)}';
         if (_cutEntity is Directory) {
           // Copy the directory
           await copyDirectory(_cutEntity!.path, newPath);
@@ -492,6 +471,8 @@ class _FolderScreenState extends State<FolderScreen> {
           // Remove the following line to keep the original file after copying
           // await (_cutEntity as File).delete();
         }
+
+        // Add blur effect to the cut entity
         setState(() {
           _cutEntity = null;
         });
@@ -500,8 +481,6 @@ class _FolderScreenState extends State<FolderScreen> {
       }
     }
   }
-
-
 
   void toggleView() {
     setState(() {
@@ -522,5 +501,27 @@ class _FolderScreenState extends State<FolderScreen> {
   void saveViewMode(bool isGridView) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setBool('isGridView', isGridView);
+  }
+
+  Future<void> copyDirectory(String source, String destination) async {
+    try {
+      final sourceDir = Directory(source);
+      final destinationDir = Directory(destination);
+
+      if (!await destinationDir.exists()) {
+        await destinationDir.create(recursive: true);
+      }
+
+      await for (final entity in sourceDir.list(recursive: true)) {
+        final newPath = destinationDir.path + '/' + entity.path.split('/').last;
+        if (entity is Directory) {
+          await copyDirectory(entity.path, newPath);
+        } else if (entity is File) {
+          await entity.copy(newPath);
+        }
+      }
+    } catch (e) {
+      print('Error copying directory: $e');
+    }
   }
 }
